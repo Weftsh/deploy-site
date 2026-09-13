@@ -1,0 +1,69 @@
+name: "Weft Deploy Site"
+description: Publish a built directory to a repository on Weft, where .weft/site.yml serves it as a static site.
+author: Weft
+branding:
+  icon: upload-cloud
+  color: gray-dark
+
+inputs:
+  token:
+    description: >-
+      A Weft token with `repo:write` on the repository. Sent as an
+      Authorization header, never in a URL, and never written to a log.
+    required: true
+  repository:
+    description: The repository on Weft that serves the site, as `org/repo`.
+    required: true
+  directory:
+    description: The built directory to publish, relative to the workspace.
+    required: false
+    default: dist
+  path:
+    description: >-
+      The directory in the repository's tree the files land under. This is
+      what `publish:` in `.weft/site.yml` must name; the site config cannot
+      publish the root of the tree.
+    required: false
+    default: dist
+  branch:
+    description: >-
+      The branch on Weft that receives the deploy. `.weft/site.yml` on the
+      default branch must name it in `branch:`.
+    required: false
+    default: weft-site
+  api-url:
+    description: The Weft deployment to publish to.
+    required: false
+    default: https://api.weft.sh
+  message:
+    description: >-
+      The commit message. Defaults to `Deploy <short sha> from <repository>`,
+      from the run's own commit and repository.
+    required: false
+    default: ""
+  chunk-operations:
+    description: >-
+      The most file operations one request carries. The server refuses more
+      than 10000; a deploy larger than one chunk is staged and published in
+      one move.
+    required: false
+    default: "5000"
+  chunk-bytes:
+    description: >-
+      The most bytes of file content one request carries, as sent (binary
+      files travel base64-encoded). The server refuses a request body over
+      64 MB.
+    required: false
+    default: "33554432"
+
+outputs:
+  commit:
+    description: The commit the branch points at when the deploy is done.
+  url:
+    description: The site's address, or empty when the deployment has no public sites domain yet.
+  changed:
+    description: How many files were put or deleted. `0` means the branch already held the directory.
+
+runs:
+  using: node20
+  main: dist/index.js

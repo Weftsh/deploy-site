@@ -1,0 +1,25 @@
+{
+  "name": "weftsh-deploy-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Publish a built directory to a repository on Weft, where .weft/site.yml serves it as a static site.",
+  "license": "MIT",
+  "scripts": {
+    "pretest": "npm run build",
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/index.js --log-level=warning",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.6.0",
+    "vitest": "^5.0.0"
+  },
+  "overrides": {
+    "undici": "^6.28.0"
+  }
+}

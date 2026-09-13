@@ -1,0 +1,130 @@
+# The action's own gate.
+#
+# The unit suite, the typecheck and the freshness of `dist/` run on Weft's
+# hosted runners (`runs-on: weft`), so every push here is a job on the
+# fleet. The real deploy runs once on `ubuntu-latest` on purpose: this
+# action exists for GitHub-hosted runners, only a GitHub-hosted runner can
+# prove that environment, and only a run through action.yml proves the
+# metadata the runner template-validates before a step starts. The local
+# suite drives dist/index.js directly and never loads action.yml.
+#
+# Both real jobs deploy to weftsh/deploy-site-ci, a native (not mirrored)
+# repository on weft.sh whose default branch carries
+# `.weft/site.yml` with `publish: dist` and `branch: weft-site`, using a
+# repo:write token in WEFT_TOKEN.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: weft
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: dist is what src builds
+        run: |
+          git diff --exit-code -- dist || {
+            echo "::error::dist/index.js is stale; run npm run build and commit it"
+            exit 1
+          }
+
+  real:
+    # One request: a fresh tree, an identical redeploy that commits
+    # nothing, then a change and a deletion.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p site/assets
+          echo "<h1>deploy-site $GITHUB_SHA</h1>" > site/index.html
+          echo "body{}" > site/assets/site.css
+          printf '\x89PNG\r\n\x1a\n\0\0' > site/assets/pixel.png
+      - id: first
+        uses: ./
+        with:
+          repository: weftsh/deploy-site-ci
+          token: ${{ secrets.WEFT_TOKEN }}
+          directory: site
+      - id: again
+        uses: ./
+        with:
+          repository: weftsh/deploy-site-ci
+          token: ${{ secrets.WEFT_TOKEN }}
+          directory: site
+      - run: |
+          rm site/assets/site.css
+          echo "<h1>changed</h1>" > site/index.html
+      - id: changed
+        uses: ./
+        with:
+          repository: weftsh/deploy-site-ci
+          token: ${{ secrets.WEFT_TOKEN }}
+          directory: site
+      - run: |
+          test "${{ steps.first.outputs.changed }}" -ge 3
+          test "${{ steps.again.outputs.changed }}" = 0
+          test "${{ steps.again.outputs.commit }}" = "${{ steps.first.outputs.commit }}"
+          test "${{ steps.changed.outputs.changed }}" = 2
+          test "${{ steps.changed.outputs.commit }}" != "${{ steps.first.outputs.commit }}"
+          echo "url: ${{ steps.changed.outputs.url }}"
+
+  chunked:
+    # More operations than one chunk carries: the staging branch, the
+    # reset, and the publish commit, against the real server.
+    runs-on: weft
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p site
+          for i in $(seq 1 7); do echo "page $i $GITHUB_SHA" > "site/p$i.html"; done
+      - id: deploy
+        uses: ./
+        with:
+          repository: weftsh/deploy-site-ci
+          token: ${{ secrets.WEFT_TOKEN }}
+          directory: site
+          chunk-operations: 3
+      - run: |
+          test "${{ steps.deploy.outputs.changed }}" -ge 7
+          test -n "${{ steps.deploy.outputs.commit }}"
+
+  refuse:
+    # An executable in the build fails the step by name, before any
+    # request: the api-url here answers nothing, so a step that got as far
+    # as the network would fail with a different sentence.
+    runs-on: weft
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p site
+          echo "<h1>x</h1>" > site/index.html
+          printf '#!/bin/sh\n' > site/run.sh
+          chmod +x site/run.sh
+      # The runner spells a hyphenated input as INPUT_API-URL, which a
+      # shell cannot export but env(1) can set.
+      - run: |
+          set +e
+          out=$(env INPUT_TOKEN=not-a-token INPUT_REPOSITORY=weftsh/deploy-site-ci \
+            INPUT_DIRECTORY=site 'INPUT_API-URL=https://127.0.0.1:9' \
+            'INPUT_CHUNK-OPERATIONS=5000' 'INPUT_CHUNK-BYTES=33554432' \
+            node dist/index.js 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          test "$code" = 1
+          echo "$out" | grep -q '::error::run.sh is executable'
