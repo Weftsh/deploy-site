@@ -84,6 +84,12 @@ The step fails, naming the path or the reason, before anything is sent:
   `.weft/site.yml` refuses to publish the root, so a deploy there could
   never be served.
 
+The step also fails when Weft never answers: the message names the
+request and the reason the transport gave (`GET /branches got no
+answer: fetch failed: connect ECONNREFUSED …`), which is what a wrong
+`api-url`, a deployment that is down, or a runner with no route out
+looks like.
+
 The step also fails when Weft refuses:
 
 - `401`/`404`: the token cannot see the repository, or it does not exist;

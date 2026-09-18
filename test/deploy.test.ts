@@ -1,9 +1,10 @@
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { blobOid } from "../src/blob";
-import { WeftClient } from "../src/client";
+import { TransportError, WeftClient } from "../src/client";
 import { deploy, type DeployConfig, type Logger } from "../src/deploy";
 import { chunk, MAX_OPERATIONS, type SizedOperation } from "../src/plan";
 import { FakeWeft } from "./fake";
@@ -35,6 +36,15 @@ async function write(files: Record<string, string | Uint8Array>) {
     await mkdir(join(dir, p, ".."), { recursive: true });
     await writeFile(join(dir, p), c);
   }
+}
+
+/** A port that was just listening and is not any more. */
+async function closedPort(): Promise<number> {
+  const srv = createServer();
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  const { port } = srv.address() as { port: number };
+  await new Promise<void>((r) => srv.close(() => r()));
+  return port;
 }
 
 function client() {
@@ -320,6 +330,40 @@ describe("the token and the site", () => {
     const wrong = new WeftClient(fake.url, "weft_01test_other", `${fake.org}/${fake.repo}`);
     await expect(deploy(config(), wrong, log)).rejects.toThrow("GET /branches answered 401: unauthorized");
     await expect(deploy(config(), wrong, log)).rejects.not.toThrow(/other/);
+  });
+
+  it("names the request and the reason when the server never answers", async () => {
+    // A port nothing listens on: the same shape as an api-url that is
+    // wrong, a deployment that is down, or a runner with no route out.
+    // undici says `fetch failed` and keeps the reason on `cause`.
+    await write({ "index.html": "x" });
+    const port = await closedPort();
+    const nobody = new WeftClient(`http://127.0.0.1:${port}`, fake.token, `${fake.org}/${fake.repo}`);
+    const err = await deploy(config(), nobody, log).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TransportError);
+    expect((err as Error).message).toMatch(/^GET \/branches got no answer: fetch failed: .*ECONNREFUSED/);
+    expect((err as Error).message).not.toContain("secret");
+  });
+
+  it("flattens a multi-address refusal and falls back to the code when a cause has no message", async () => {
+    // Resolving a name to several addresses gives an AggregateError whose
+    // own message is empty; some causes carry only a `code`.
+    await write({ "index.html": "x" });
+    const aggregate = new AggregateError(
+      [new Error("connect ECONNREFUSED ::1:443"), new Error("connect ECONNREFUSED 127.0.0.1:443")],
+      "",
+    );
+    const throwing = (cause: unknown) =>
+      new WeftClient(fake.url, fake.token, `${fake.org}/${fake.repo}`, async () => {
+        throw new TypeError("fetch failed", { cause });
+      });
+    await expect(deploy(config(), throwing(aggregate), log)).rejects.toThrow(
+      "GET /branches got no answer: fetch failed: connect ECONNREFUSED ::1:443; connect ECONNREFUSED 127.0.0.1:443",
+    );
+    const bare = Object.assign(new Error(""), { code: "UND_ERR_SOCKET" });
+    await expect(deploy(config(), throwing(bare), log)).rejects.toThrow(
+      "GET /branches got no answer: fetch failed: UND_ERR_SOCKET",
+    );
   });
 
   it("says when the deployment has no sites domain, and when the config will not serve this deploy", async () => {

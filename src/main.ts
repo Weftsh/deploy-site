@@ -1,5 +1,5 @@
 import * as core from "@actions/core";
-import { ApiError, WeftClient } from "./client";
+import { ApiError, TransportError, WeftClient } from "./client";
 import { deploy, DeployRefusal } from "./deploy";
 import { PlanRefusal } from "./plan";
 import { WalkRefusal } from "./walk";
@@ -42,7 +42,11 @@ async function run(): Promise<void> {
 
 run().catch((e: unknown) => {
   const expected =
-    e instanceof WalkRefusal || e instanceof PlanRefusal || e instanceof DeployRefusal || e instanceof ApiError;
+    e instanceof WalkRefusal ||
+    e instanceof PlanRefusal ||
+    e instanceof DeployRefusal ||
+    e instanceof ApiError ||
+    e instanceof TransportError;
   if (!expected && e instanceof Error && e.stack) core.debug(e.stack);
   core.setFailed(e instanceof Error ? e.message : String(e));
 });

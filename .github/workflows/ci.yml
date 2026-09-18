@@ -12,6 +12,17 @@
 # repository on weft.sh whose default branch carries
 # `.weft/site.yml` with `publish: dist` and `branch: weft-site`, using a
 # repo:write token in WEFT_TOKEN.
+#
+# That repository is shared by every run, and its `weft-site` branch
+# keeps whatever the last job left on it. So each job's files carry
+# the run id and attempt: a first deploy then always differs from the
+# tree it finds, whatever that is, and the counts asserted below are a
+# property of the job and not of the run before it. A scheduled run
+# has the same GITHUB_SHA as the one before, which is how a file named
+# after the sha alone came to be "unchanged" and the first deploy of
+# `real` to report 2 instead of 3. `chunked` runs after `real` for the
+# same reason: both move one branch, and a deploy that lands between
+# `real`'s first and second step is a change `again` would count.
 name: ci
 on:
   push:
@@ -51,9 +62,10 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           mkdir -p site/assets
-          echo "<h1>deploy-site $GITHUB_SHA</h1>" > site/index.html
-          echo "body{}" > site/assets/site.css
-          printf '\x89PNG\r\n\x1a\n\0\0' > site/assets/pixel.png
+          run="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "<h1>deploy-site $GITHUB_SHA run $run</h1>" > site/index.html
+          echo "body{} /* $run */" > site/assets/site.css
+          { printf '\x89PNG\r\n\x1a\n\0\0'; echo "$run"; } > site/assets/pixel.png
       - id: first
         uses: ./
         with:
@@ -68,7 +80,7 @@ jobs:
           directory: site
       - run: |
           rm site/assets/site.css
-          echo "<h1>changed</h1>" > site/index.html
+          echo "<h1>changed in $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT</h1>" > site/index.html
       - id: changed
         uses: ./
         with:
@@ -87,11 +99,14 @@ jobs:
     # More operations than one chunk carries: the staging branch, the
     # reset, and the publish commit, against the real server.
     runs-on: weft
+    needs: real
     steps:
       - uses: actions/checkout@v4
       - run: |
           mkdir -p site
-          for i in $(seq 1 7); do echo "page $i $GITHUB_SHA" > "site/p$i.html"; done
+          for i in $(seq 1 7); do
+            echo "page $i $GITHUB_SHA run $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" > "site/p$i.html"
+          done
       - id: deploy
         uses: ./
         with:
@@ -107,9 +122,19 @@ jobs:
     # An executable in the build fails the step by name, before any
     # request: the api-url here answers nothing, so a step that got as far
     # as the network would fail with a different sentence.
+    #
+    # This job runs dist/index.js itself, so it needs a `node` on PATH.
+    # The other jobs do not: `real` and `chunked` run the action through
+    # action.yml, and the runner brings its own Node for that. A
+    # GitHub-hosted image has one anyway; a weft runner does not, and
+    # without this step the job failed with `env: 'node': No such file
+    # or directory` on every run.
     runs-on: weft
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
       - run: |
           mkdir -p site
           echo "<h1>x</h1>" > site/index.html

@@ -7,6 +7,7 @@
  */
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -94,6 +95,30 @@ describe("dist/index.js", () => {
     });
     expect(run.code).toBe(1);
     expect(run.stdout).toContain("::error::run.sh is executable");
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it("fails the step with the request and the reason when the api-url answers nothing", async () => {
+    // What a wrong api-url, a deployment that is down, or a runner with
+    // no route out looks like from the job log. Before this was held,
+    // the step failed with `##[error]fetch failed` and not a word more.
+    await mkdir(join(dir, "dist"), { recursive: true });
+    await writeFile(join(dir, "dist/index.html"), "x");
+    const srv = createServer();
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const { port } = srv.address() as { port: number };
+    await new Promise<void>((r) => srv.close(() => r()));
+    const run = await runAction({
+      token: fake.token,
+      repository: `${fake.org}/${fake.repo}`,
+      "api-url": `http://127.0.0.1:${port}`,
+      "chunk-operations": "5000",
+      "chunk-bytes": "33554432",
+    });
+    expect(run.code).toBe(1);
+    expect(run.stdout).toMatch(/::error::GET \/branches got no answer: fetch failed: .*ECONNREFUSED/);
+    const lines = run.stdout.split("\n");
+    expect(lines.filter((l) => !l.startsWith("::add-mask::")).join("\n")).not.toContain("secret");
     expect(fake.requests).toHaveLength(0);
   });
 

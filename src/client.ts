@@ -59,6 +59,38 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The server never answered: the socket was refused, the name did not
+ * resolve, the certificate was not trusted, the connection dropped.
+ * undici reports every one of those as a bare `fetch failed` and keeps
+ * the reason on `cause`, so the message here names the request and
+ * walks the cause chain; a step that fails with "fetch failed" and
+ * nothing else is undebuggable from the log.
+ */
+export class TransportError extends Error {
+  constructor(
+    public readonly method: string,
+    public readonly route: string,
+    cause: unknown,
+  ) {
+    super(`${method} ${route} got no answer: ${explain(cause)}`, { cause });
+  }
+}
+
+function explain(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  const parts: string[] = [];
+  let cur: unknown = e;
+  for (let depth = 0; cur instanceof Error && depth < 5; depth++, cur = cur.cause) {
+    const inner =
+      cur instanceof AggregateError
+        ? cur.errors.map((x) => (x instanceof Error ? x.message : String(x))).join("; ")
+        : cur.message;
+    parts.push(inner || (cur as { code?: string }).code || cur.name);
+  }
+  return parts.join(": ");
+}
+
 function describe(body: unknown): string {
   if (body && typeof body === "object" && "error" in body) {
     return String((body as { error: unknown }).error);
@@ -134,7 +166,12 @@ export class WeftClient {
       headers["content-type"] = "application/json";
       init.body = JSON.stringify(body);
     }
-    const res = await this.fetchImpl(`${this.base}${route}`, init);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.base}${route}`, init);
+    } catch (e) {
+      throw new TransportError(method, route, e);
+    }
     const text = await res.text();
     let parsed: unknown = text;
     if (text) {
