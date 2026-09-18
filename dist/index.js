@@ -21766,6 +21766,25 @@ var ApiError = class extends Error {
   route;
   body;
 };
+var TransportError = class extends Error {
+  constructor(method, route, cause) {
+    super(`${method} ${route} got no answer: ${explain(cause)}`, { cause });
+    this.method = method;
+    this.route = route;
+  }
+  method;
+  route;
+};
+function explain(e) {
+  if (!(e instanceof Error)) return String(e);
+  const parts = [];
+  let cur = e;
+  for (let depth = 0; cur instanceof Error && depth < 5; depth++, cur = cur.cause) {
+    const inner = cur instanceof AggregateError ? cur.errors.map((x) => x instanceof Error ? x.message : String(x)).join("; ") : cur.message;
+    parts.push(inner || cur.code || cur.name);
+  }
+  return parts.join(": ");
+}
 function describe(body) {
   if (body && typeof body === "object" && "error" in body) {
     return String(body.error);
@@ -21827,7 +21846,12 @@ var WeftClient = class {
       headers["content-type"] = "application/json";
       init.body = JSON.stringify(body);
     }
-    const res = await this.fetchImpl(`${this.base}${route}`, init);
+    let res;
+    try {
+      res = await this.fetchImpl(`${this.base}${route}`, init);
+    } catch (e) {
+      throw new TransportError(method, route, e);
+    }
     const text = await res.text();
     let parsed = text;
     if (text) {
@@ -22191,7 +22215,7 @@ async function run() {
   core.setOutput("changed", String(result.changed));
 }
 run().catch((e) => {
-  const expected = e instanceof WalkRefusal || e instanceof PlanRefusal || e instanceof DeployRefusal || e instanceof ApiError;
+  const expected = e instanceof WalkRefusal || e instanceof PlanRefusal || e instanceof DeployRefusal || e instanceof ApiError || e instanceof TransportError;
   if (!expected && e instanceof Error && e.stack) core.debug(e.stack);
   core.setFailed(e instanceof Error ? e.message : String(e));
 });
